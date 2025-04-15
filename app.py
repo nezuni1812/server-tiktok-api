@@ -30,6 +30,7 @@ cors = CORS(app, resources={
     }
 })
 
+port = os.getenv("PORT") or 4000
 CLIENT_KEY = os.getenv("TIKTOK_CLIENT_KEY")
 CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET")
 REDIRECT_URI = "https://server-tiktok-api.onrender.com/callback"
