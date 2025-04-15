@@ -32,7 +32,7 @@ cors = CORS(app, resources={
 
 CLIENT_KEY = os.getenv("TIKTOK_CLIENT_KEY")
 CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET")
-REDIRECT_URI = "https://3967-2001-ee0-50c6-90b0-a5d0-e810-2510-5d53.ngrok-free.app/callback"
+REDIRECT_URI = "https://server-tiktok-api.onrender.com/callback"
 SCOPES = "user.info.basic,video.list"
 
 # Khởi tạo database

@@ -13,4 +13,3 @@ asyncio
 aiohttp
 boto3
 flask_cors
-recharts
