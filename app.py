@@ -3,7 +3,7 @@ import secrets
 import hashlib
 import base64
 import requests
-from flask import Flask, request, redirect, session, jsonify
+from flask import Flask, request, redirect, jsonify
 from flask_cors import CORS
 from config.database import init_db
 from routes.clip_routes import clip_bp
@@ -20,19 +20,19 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = secrets.token_urlsafe(64)
-app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Quan trọng!
-app.config['SESSION_COOKIE_SECURE'] = True      # Bắt buộc khi SAMESITE=None
 
 cors = CORS(app, resources={
     r"/*": {
         "origins": "http://localhost:5173",
-        "supports_credentials": True
+        "supports_credentials": True,
+        "allow_headers": ["Content-Type", "Authorization"],
+        "expose_headers": ["Set-Cookie"]
     }
 })
 
 port = os.getenv("PORT") or 4000
 CLIENT_KEY = os.getenv("TIKTOK_CLIENT_KEY")
-CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET")
+CLIENT_SECRET = setenv("TIKTOK_CLIENT_SECRET")
 REDIRECT_URI = "https://server-tiktok-api.onrender.com/callback"
 SCOPES = "user.info.basic,video.list"
 
@@ -59,45 +59,50 @@ def generate_code_challenge_pair():
 
 @app.route("/auth/init/")
 def auth_init():
-    code_verifier, code_challenge = generate_code_challenge_pair()
-    state = generate_random_string(16)
-    
-    session['code_verifier'] = code_verifier
-    session['state'] = state
-    
-    auth_url = (
-        f'https://www.tiktok.com/v2/auth/authorize/?'
-        f'client_key={urllib.parse.quote(CLIENT_KEY)}&'
-        f'scope={urllib.parse.quote(SCOPES)}&'
-        f'response_type=code&'
-        f'redirect_uri={urllib.parse.quote(REDIRECT_URI)}&'
-        f'state={urllib.parse.quote(state)}&'
-        f'code_challenge={urllib.parse.quote(code_challenge)}&'
-        f'code_challenge_method=S256'
-    )
-    print("Generated auth_url:", auth_url)
-    return jsonify({"auth_url": auth_url})
+    try:
+        code_verifier, code_challenge = generate_code_challenge_pair()
+        state = generate_random_string(16)
+        
+        # Truyền state và code_verifier qua query params
+        redirect_uri_with_params = f"{REDIRECT_URI}?stored_state={urllib.parse.quote(state)}&code_verifier={urllib.parse.quote(code_verifier)}"
+        
+        auth_url = (
+            f'https://www.tiktok.com/v2/auth/authorize/?'
+            f'client_key={urllib.parse.quote(CLIENT_KEY)}&'
+            f'scope={urllib.parse.quote(SCOPES)}&'
+            f'response_type=code&'
+            f'redirect_uri={urllib.parse.quote(redirect_uri_with_params)}&'
+            f'state={urllib.parse.quote(state)}&'
+            f'code_challenge={urllib.parse.quote(code_challenge)}&'
+            f'code_challenge_method=S256'
+        )
+        print("Generated auth_url:", auth_url)
+        print("Stored state:", state)
+        print("Redirect URI with params:", redirect_uri_with_params)
+        return jsonify({"auth_url": auth_url})
+    except Exception as e:
+        print("Error in auth_init:", str(e))
+        return jsonify({"error": "Failed to initialize auth"}), 500
 
 @app.route("/callback")
 def callback():
     code = request.args.get("code")
     state = request.args.get("state")
+    stored_state = request.args.get("stored_state")
+    code_verifier = request.args.get("code_verifier")
     error = request.args.get("error")
     
-    print("Callback received:", {"code": code, "state": state, "error": error})
-    print("Session cookie in callback:", request.cookies.get('session'))
+    print("Callback received:", {"code": code, "state": state, "stored_state": stored_state, "code_verifier": code_verifier, "error": error})
     
     if error:
         print("TikTok error:", error)
         return redirect(f"http://localhost:5173/tiktok-login?error={urllib.parse.quote(error)}")
     
-    stored_state = session.get('state')
     print("State comparison:", {"received": state, "stored": stored_state})
     if state != stored_state:
         print("State mismatch:", {"received": state, "stored": stored_state})
         return jsonify({"error": "CSRF verification failed"}), 400
     
-    code_verifier = session.get('code_verifier')
     if not code_verifier:
         print("Missing code_verifier")
         return jsonify({"error": "Missing code verifier"}), 400
@@ -106,15 +111,16 @@ def callback():
         print("Missing code")
         return jsonify({"error": "Missing code"}), 400
 
-    access_token = get_access_token(code, code_verifier)
+    redirect_uri_with_params = f"{REDIRECT_URI}?stored_state={urllib.parse.quote(stored_state)}&code_verifier={urllib.parse.quote(code_verifier)}"
+    access_token = get_access_token(code, code_verifier, redirect_uri_with_params)
     if access_token:
         print("Access token obtained:", access_token)
         return redirect(f"http://localhost:5173/tiktok-stats?access_token={urllib.parse.quote(access_token)}")
     else:
         print("Failed to obtain access token")
         return redirect("http://localhost:5173/tiktok-login?error=failed_to_get_token")
-    
-def get_access_token(code, code_verifier):
+
+def get_access_token(code, code_verifier, redirect_uri):
     url = 'https://open.tiktokapis.com/v2/oauth/token/'
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded'
@@ -124,9 +130,10 @@ def get_access_token(code, code_verifier):
         'client_secret': CLIENT_SECRET,
         'code': code,
         'grant_type': 'authorization_code',
-        'redirect_uri': REDIRECT_URI,
+        'redirect_uri': redirect_uri,
         'code_verifier': code_verifier
     }
+    print("Token request payload:", payload)
     try:
         response = requests.post(url, headers=headers, data=payload)
         response.raise_for_status()
@@ -135,6 +142,8 @@ def get_access_token(code, code_verifier):
         return data.get('access_token')
     except requests.RequestException as e:
         print("Error fetching access token:", str(e))
+        print("Response status:", response.status_code)
+        print("Response text:", response.text)
         return None
 
 @app.route("/")
@@ -181,4 +190,5 @@ def get_access_token_old():
         return jsonify({"error": "Failed to fetch access token", "details": error_message}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=port)
+# </DOCUMENT>
